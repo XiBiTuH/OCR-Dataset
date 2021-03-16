@@ -1,16 +1,22 @@
 import numpy as np
 from PIL import Image
 import string
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold, cross_val_score
 import cv2
 import matplotlib.pyplot as plt
 from skimage.feature import local_binary_pattern, greycomatrix, greycoprops
 from skimage.filters import gabor
 from skimage.feature import hog
+from tensorflow.python.keras.layers import Dense
+from tensorflow.python.keras.models import Sequential
+from tensorflow.python.keras.utils import np_utils
+from tensorflow.python.keras.wrappers.scikit_learn import KerasClassifier
 from tqdm import tqdm
 import os
 import pickle
 from sklearn import preprocessing
+from tensorflow.keras.utils import to_categorical
+
 
 
 def arrangeData():
@@ -24,12 +30,13 @@ def arrangeData():
     #Get all lower case letters + 0-9 number
     classes = list(string.ascii_lowercase) + ['0','1','2','3','4','5','6','7','8','9']
 
-    #Encode labels
-    encoder = preprocessing.LabelEncoder()
-    encoder.fit(classes)
-    print(encoder.classes_)
+
+
     X = []
     y = []
+    
+
+
 
     #Arrange data
     count_class = 0
@@ -41,14 +48,15 @@ def arrangeData():
         for j in range(last,i,50):
 
             X.append(data[j:j + 50,:])
-            y.append(encoder.transform([classes[count_class]])[0])
-
+            y.append(classes[count_class])
 
         count_class += 1
         last = i
 
 
-    return np.asarray(X),np.asarray(y)
+
+
+    return np.asarray(X),np.asarray(y),
 
 
 #Check if a pixel is white or black
@@ -255,6 +263,22 @@ def image_to_features(images):
 
 
 
+# define NN model
+def NNModel():
+
+    # create model
+    model = Sequential()
+    model.add(Dense(16, input_dim=17, activation='relu'))
+
+    model.add(Dense(32, activation='relu'))
+
+    model.add(Dense(64, activation='relu'))
+
+    model.add(Dense(36, activation='softmax'))
+    # Compile model
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    return model
+
 
 if __name__ == '__main__':
 
@@ -266,15 +290,25 @@ if __name__ == '__main__':
     images,y = arrangeData()
 
 
+    #Encode labels
+    encoder = preprocessing.LabelEncoder()
+    encoder.fit(y)
+    y = encoder.transform(y)
+    print(y[0])
+    dummy_y = to_categorical(y)
 
+    #If features already sabed then load them
     if os.path.exists("./features.p"): X = pickle.load(open("./features.p","rb"))
     else: X = image_to_features(images)
 
+    #Create features families
     labelFamilies = {
-        'SimpleFeatures' : X[:5],
-        'EdgeFeatures' : X[5:14],
+        'SimpleFeatures' : X[:6],
+        'OriginalFeatures' : X[6:10],
+        'EdgeFeatures' : X[10:14],
         'GaborFeatures' : X[14:]
     }
+
 
     #Normalize data
     X = preprocessing.normalize(X, norm="l1")
@@ -326,15 +360,6 @@ if __name__ == '__main__':
 
 
 
-    #Linear Regression
-    from sklearn.linear_model import LinearRegression
-
-    linear = LinearRegression()
-
-    linear.fit(X_train,y_train)
-
-    print(f"Linear Regression Score : {linear.score(X_test, y_test)}")
-
 
     #SVM Classifier
     from sklearn.pipeline import make_pipeline
@@ -349,3 +374,11 @@ if __name__ == '__main__':
     acc = accuracy_score(y_test, y_pred)
     print(f"Decision tree accuracy : {acc}")
 
+
+    #Neural Network
+
+    #Get training and testing splits with one hot encoded ys
+    X_train, X_test, y_train, y_test = train_test_split(X, dummy_y, test_size =0.2)
+
+    nn = NNModel()
+    nn.fit(X_train,y_train,epochs=5000)
