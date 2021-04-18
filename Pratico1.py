@@ -1,22 +1,21 @@
 import numpy as np
-from PIL import Image
+import pandas as pandas
+import seaborn as seaborn
+import sklearn
 import string
-from sklearn.model_selection import train_test_split, KFold, cross_val_score
+from sklearn.model_selection import train_test_split
 import cv2
 import matplotlib.pyplot as plt
-from skimage.feature import local_binary_pattern, greycomatrix, greycoprops
+from skimage.feature import greycomatrix, greycoprops
 from skimage.filters import gabor
-from skimage.feature import hog
 from tensorflow.python.keras.layers import Dense
 from tensorflow.python.keras.models import Sequential
-from tensorflow.python.keras.utils import np_utils
-from tensorflow.python.keras.wrappers.scikit_learn import KerasClassifier
 from tqdm import tqdm
 import os
 import pickle
 from sklearn import preprocessing
 from tensorflow.keras.utils import to_categorical
-
+from sklearn.metrics import confusion_matrix
 
 
 def arrangeData():
@@ -109,7 +108,7 @@ def featureExtraction(image):
          - Number of white pixels  -> C1
          - Number of black pixels -> C2
          - Mean Value of Pixel Values -> C3
-         - Horizontal lenght value of the letter/number -> C4 
+         - Horizontal length value of the letter/number -> C4 
          - Vertical length value of the letter/number -> C5
          
          - Contrast value of original image -> C6
@@ -209,7 +208,7 @@ def featureExtraction(image):
 
 
     #GABOR FILTERS
-    gaborFiltR, gaborFiltImg = gabor(image,frequency=0.5)
+    gaborFiltR, gaborFiltImg = gabor(image,frequency=0.6)
     gaborFilt = (gaborFiltR ** 2 + gaborFiltImg ** 2) // 2
 
     #Gray co-occurence matrix relative to the original image
@@ -245,6 +244,8 @@ def featureExtraction(image):
 
 
 
+
+
     return C1,C2,C3,C4,C5,C6,C7,C8,C9,C10,C11,C12,C13,C14,C15,C16,C17
 
 
@@ -264,17 +265,20 @@ def image_to_features(images):
 
 
 # define NN model
-def NNModel():
+def NNModel(features):
 
     # create model
     model = Sequential()
-    model.add(Dense(16, input_dim=17, activation='relu'))
+    model.add(Dense(16, input_dim=features, activation='relu'))
+
+    model.add(Dense(16, activation='relu'))
 
     model.add(Dense(32, activation='relu'))
 
     model.add(Dense(64, activation='relu'))
 
     model.add(Dense(36, activation='softmax'))
+
     # Compile model
     model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
     return model
@@ -282,9 +286,6 @@ def NNModel():
 
 if __name__ == '__main__':
 
-    '''
-    img = Image.fromarray(X[20]).convert("L")
-    img.show()'''
 
     #Get X and y
     images,y = arrangeData()
@@ -294,91 +295,154 @@ if __name__ == '__main__':
     encoder = preprocessing.LabelEncoder()
     encoder.fit(y)
     y = encoder.transform(y)
-    print(y[0])
     dummy_y = to_categorical(y)
 
-    #If features already sabed then load them
+    #If features already saved then load them -> instead of calculating them again
     if os.path.exists("./features.p"): X = pickle.load(open("./features.p","rb"))
     else: X = image_to_features(images)
 
+
+
     #Create features families
     labelFamilies = {
-        'SimpleFeatures' : X[:6],
-        'OriginalFeatures' : X[6:10],
-        'EdgeFeatures' : X[10:14],
-        'GaborFeatures' : X[14:]
+
+        'SimpleFeatures' : X[:,:6],
+        'OriginalFeatures' : X[:,6:10],
+        'EdgeFeatures' : X[:,10:14],
+        'GaborFeatures' : X[:,14:],
+
+        'SimpleOriginalFeatures' : X[:,:10],
+        'EdgeGaborFeatures' : X[:, 10:],
+        'OriginalEdgeFeatures' : X[:,6:14],
+
+        'SimpleOriginalEdgeFeatures' : X[:,:14],
+        'OriginalEdgeGaborFeatures' : X[:,6:],
+
+        'AllFamilies': X
     }
 
+    #for each family
+    for family in labelFamilies.keys():
 
-    #Normalize data
-    X = preprocessing.normalize(X, norm="l1")
+        #Get features of family
+        nFeatures = len(labelFamilies[family][0])
 
-    #Get training and testing splits
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size =0.2)
+        #Get the data only for a specific family
+        X = labelFamilies[family]
+
+        print("Data for family : {}".format(family))
+
+        #Get training and testing splits
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size =0.15,stratify=y,random_state=5)
 
 
-    #KNN model
-    from sklearn.neighbors import KNeighborsClassifier
-    from sklearn.metrics import plot_confusion_matrix, f1_score
-    from sklearn.metrics import accuracy_score
+        #normalize training data and receive the mean values
+        X_train, norm = preprocessing.normalize(X_train, norm="l2", axis = 0, return_norm=True)
 
-    greatest = [0,0]
-    for i in range(1,30):
 
-        #Create model with k = 3
-        knnModel = KNeighborsClassifier(n_neighbors=i)
+        #normalize the testing set with the values returned from training data
+        for k in range(len(norm)):
+            X_test[:,k] = X_test[:,k] /norm[k]
 
-        knnModel.fit(X_train,y_train)
 
-        #Confusion matrix
-        #plot_confusion_matrix(knnModel, X_test, y_test)
 
-        y_pred = knnModel.predict(X_test)
+
+        #KNN model
+        from sklearn.neighbors import KNeighborsClassifier
+        from sklearn.metrics import plot_confusion_matrix, f1_score
+        from sklearn.metrics import accuracy_score
+
+
+        greatest = [0,0,0]
+        for i in range(1,30):
+
+            #Create model with k = 3
+            knnModel = KNeighborsClassifier(n_neighbors=i)
+
+            knnModel.fit(X_train,y_train)
+
+            #Confusion matrix
+
+            y_pred = knnModel.predict(X_test)
+            acc = accuracy_score(y_test, y_pred)
+            f1 = f1_score(y_test, y_pred, average='macro')
+            if acc > greatest[0]:
+                greatest[0] = acc
+                greatest[1] = i
+                greatest[2] = f1
+
+        print(f"KNN best accuracy : {greatest[0]}")
+        print(f"KNN f1_Score: {greatest[2]}")
+
+
+        #Decision Tree Model
+        from sklearn.tree import DecisionTreeClassifier
+
+        treeClassifier = DecisionTreeClassifier(random_state=0)
+
+        treeClassifier.fit(X_train,y_train)
+
+        y_pred = treeClassifier.predict(X_test)
         acc = accuracy_score(y_test, y_pred)
-        if acc > greatest[0]:
-            greatest[0] = acc
-            greatest[1] = i
-
-    print(f"KNN best accuracy : {greatest[0]}")
-
-
-
-
-    #Decision Tree Model
-    from sklearn.tree import DecisionTreeClassifier
-
-    treeClassifier = DecisionTreeClassifier(random_state=0)
-
-    treeClassifier.fit(X_train,y_train)
-
-    y_pred = treeClassifier.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    f1 = f1_score(y_test, y_pred, average='macro')
-    print(f"Decision tree accuracy : {acc}")
-    #F1 = 2 * (precision * recall) / (precision + recall)
-    print(f"Decision tree F1 Score : {f1}")
+        f1 = f1_score(y_test, y_pred, average='macro')
+        print(f"Decision tree accuracy : {acc}")
+        #F1 = 2 * (precision * recall) / (precision + recall)
+        print(f"Decision tree F1 Score : {f1}")
 
 
 
 
-    #SVM Classifier
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.svm import SVC
+        #SVM Classifier
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.svm import SVC
 
-    svm = make_pipeline(StandardScaler(), SVC(gamma='auto'))
+        svm = make_pipeline(StandardScaler(), SVC(gamma='auto'))
 
-    svm.fit(X_train,y_train)
+        svm.fit(X_train,y_train)
 
-    y_pred = svm.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    print(f"Decision tree accuracy : {acc}")
+        y_pred = svm.predict(X_test)
+        acc = accuracy_score(y_test, y_pred)
+        f1 = f1_score(y_test, y_pred, average='macro')
+        print(f"SVM accuracy : {acc}")
+        print(f"SVM f1-score : {f1}")
+
+        plot_confusion_matrix(svm,
+                              X_test,
+                              y_test,
+                              cmap='Blues'
+                              )
 
 
-    #Neural Network
+        #Neural Network
+        plt.savefig(family + ".jpg")
+        plt.clf()
+        #Get training and testing splits with one hot encoded ys
+        X_train, X_test, y_train, y_test = train_test_split(X, dummy_y, test_size =0.15,stratify=y,random_state=5)
+        X_train, norm = preprocessing.normalize(X_train, norm="l2", axis = 0, return_norm=True)
 
-    #Get training and testing splits with one hot encoded ys
-    X_train, X_test, y_train, y_test = train_test_split(X, dummy_y, test_size =0.2)
 
-    nn = NNModel()
-    nn.fit(X_train,y_train,epochs=5000)
+        for k in range(len(norm)):
+            X_test[:,k] = X_test[:,k] /norm[k]
+
+        nn = NNModel(nFeatures)
+        nn.fit(X_train,y_train,epochs=3000, verbose = False)
+        y_pred = nn.predict(X_test)
+        y_pred = y_pred > 0.5
+        nn.evaluate(X_test,y_test)
+
+        acc = accuracy_score(y_test, y_pred)
+        f1 = f1_score(y_test, y_pred, average='macro')
+        print(f"NN -> f1-score : {f1}")
+        print("\n\n\n\ ---------------\n\n\n")
+        matrix = sklearn.metrics.confusion_matrix(y_test.argmax(axis=1), y_pred.argmax(axis=1))
+
+
+        df_cm = pandas.DataFrame(matrix, range(36), range(36))
+        # plt.figure(figsize=(10,7))
+        seaborn.set(font_scale=0.5)  # for label size
+        seaborn.heatmap(df_cm, annot=True,cmap='Blues')  # font size
+        plt.savefig(family + "nn.jpg")
+        plt.clf()
+
+
